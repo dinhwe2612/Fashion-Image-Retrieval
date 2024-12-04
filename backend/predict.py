@@ -156,7 +156,27 @@ async def predict_endpoint(file: UploadFile = File(...), text: str = Form(...)):
         print(f"File received: {file.filename}, size: {len(image_bytes)} bytes")
 
         # Perform prediction
-        top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
+        if text.strip():
+            # Process both image and text
+            top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
+        else:
+            # Process only the image
+            print("Text is empty, processing only the image.")
+            # Preprocess the image
+            image_features = preprocess_image(image_bytes, preprocess)
+            print("Image features extracted.")
+
+            # Normalize the query vector
+            query_vector = normalize_query_vector(image_features)
+            print("Query vector normalized.")
+
+            # Search FAISS index for the top images
+            D, I = search_faiss_index(index, query_vector)
+            print("FAISS index searched.")
+
+            # Retrieve the top images
+            top_images = get_top_images(image_names, D, I)
+            print("Top images retrieved.")
 
         # Convert numpy.float32 to float
         top_images = [(name, float(score)) for name, score in top_images]

@@ -14,9 +14,8 @@ clip_state_dict = torch.load(model_path, map_location=device)
 clip_model.load_state_dict(clip_state_dict["CLIP"])
 
 # Directory containing the images
-image_dir = "fationIQ/resized_image"
+image_dir = "FashionIQ/resized_images/"
 output_dir = "image_vectors"
-
 # Ensure the output directory exists
 os.makedirs(output_dir, exist_ok=True)
 

@@ -146,27 +146,13 @@ async def startup():
 # Define the API endpoint for prediction
 @app.post("/predict/")
 async def predict_endpoint(file: UploadFile = File(...), text: str = Form(...)):
-    print(text)
     try:
         image_bytes = await file.read()
         top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
         # Convert numpy.float32 to float
         top_images = [(name, float(score)) for name, score in top_images]
-        # Construct image paths and encode images in base64
-        image_base_path = "fationIQ/resized_image"
-        top_images_with_data = []
-        for name, score in top_images:
-            if name.startswith("._"):
-                continue  # Skip hidden files
-            image_path = os.path.join(image_base_path, name)
-            if not os.path.exists(image_path):
-                raise HTTPException(status_code=404, detail=f"Image file not found: {image_path}")
-            with open(image_path, "rb") as img_file:
-                encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
-                top_images_with_data.append({"image_data": encoded_image, "score": score})
         return {
-            "request_text": text,
-            "top_images": top_images_with_data
+            "top_images": top_images
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

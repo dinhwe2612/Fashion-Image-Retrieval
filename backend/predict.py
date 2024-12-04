@@ -147,14 +147,23 @@ async def startup():
 @app.post("/predict/")
 async def predict_endpoint(file: UploadFile = File(...), text: str = Form(...)):
     try:
+        # Log that the endpoint is being hit
+        print("Endpoint '/predict/' hit")
+        print(f"Received text input: {text}")
+
+        # Read the uploaded file
         image_bytes = await file.read()
+        print(f"File received: {file.filename}, size: {len(image_bytes)} bytes")
+
+        # Perform prediction
         top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
+
         # Convert numpy.float32 to float
         top_images = [(name, float(score)) for name, score in top_images]
-        return {
-            "top_images": top_images
-        }
+        print("Prediction successful")
+        return {"top_images": top_images}
     except Exception as e:
+        print(f"Error during prediction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Run the app

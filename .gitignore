@@ -1,3 +1,5 @@
 backend/FashionIQ/
+backend/pretrained_models
+frontend
 backend/__pycache__
 *.zip

@@ -1,0 +1,5 @@
+backend/pretrained_models/CIRR/RN50x4_fullft/cirr_comb_RN50x4_fullft.pt filter=lfs diff=lfs merge=lfs -text
+backend/pretrained_models/FashionIQ/RN50x4_fullft/fiq_comb_RN50x4_fullft.pt filter=lfs diff=lfs merge=lfs -text
+backend/pretrained_models/CIRR/RN50x4_fullft/cirr_clip_RN50x4_fullft.pt filter=lfs diff=lfs merge=lfs -text
+backend/pretrained_models/FashionIQ/RN50x4_fullft/fiq_clip_RN50x4_fullft.pt filter=lfs diff=lfs merge=lfs -text
+FashionIQ

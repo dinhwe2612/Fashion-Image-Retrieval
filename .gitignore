@@ -3,3 +3,8 @@ backend/pretrained_models
 backend/__pycache__
 *.zip
 pretrained_models/
+backend/fine_tuned_models/tuned_clip_best.pt
+backend/fine_tuned_models/kaggle/working/models/clip_finetuned_on_fiq_RN50x4_2024-12-14_02_50_17/saved_models/tuned_clip_best.pt
+backend/fine_tuned_models/kaggle/working/models/clip_finetuned_on_fiq_RN50x4_2024-12-14_02_50_17/train_metrics.csv
+backend/fine_tuned_models/kaggle/working/models/clip_finetuned_on_fiq_RN50x4_2024-12-14_02_50_17/training_hyperparameters.json
+backend/fine_tuned_models/kaggle/working/models/clip_finetuned_on_fiq_RN50x4_2024-12-14_02_50_17/validation_metrics.csv

@@ -9,6 +9,7 @@ from io import BytesIO
 from combiner import Combiner
 from data_utils import targetpad_transform
 import base64
+from typing import Optional
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Needed for FAISS on Windows
 
@@ -17,8 +18,41 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model_path = "pretrained_models/CIRR/RN50x4_fullft/cirr_clip_RN50x4_fullft.pt"
 combiner_path = "pretrained_models/CIRR/RN50x4_fullft/cirr_comb_RN50x4_fullft.pt"
 
+# Fine-tuned model index and metadata paths
+fine_tuned_index_path = "fine_tuned_image_index.faiss"
+fine_tuned_metadata_path = "fine_tuned_image_metadata.npz"
+
+fine_tuned_model_path = "fine_tuned_models/tuned_clip_best.pt"
+
 # Initialize FastAPI app
 app = FastAPI()
+
+# Load Fine-Tuned CLIP model
+def load_fine_tuned_clip_model():
+    clip_model_name = 'RN50x4'
+    clip_model, preprocess = clip.load(clip_model_name, device=device, jit=False)
+    clip_state_dict = torch.load(fine_tuned_model_path, map_location=device)
+    clip_model.load_state_dict(clip_state_dict["CLIP"])  # Load tuned_clip_best.pt weights
+    clip_model.eval()
+    return clip_model, preprocess
+
+# Load Fine-Tuned CLIP model
+# def load_fine_tuned_clip_model():
+#     clip_model_name = 'RN50x4'
+#     clip_model, preprocess = clip.load(clip_model_name, device=device, jit=False)
+
+#     # Load fine-tuned weights
+#     clip_state_dict = torch.load(fine_tuned_model_path, map_location=device)
+
+#     # Check for the "CLIP" key and extract it
+#     if "CLIP" in clip_state_dict:
+#         clip_state_dict = clip_state_dict["CLIP"]  # Extract the actual model weights
+    
+#     # Load state dictionary into the model
+#     clip_model.load_state_dict(clip_state_dict)
+#     clip_model.eval()
+#     print("Fine-tuned CLIP model loaded successfully.")
+#     return clip_model, preprocess
 
 # Load CLIP model
 def load_clip_model():
@@ -40,17 +74,17 @@ def load_combiner():
     return combiner
 
 # Load the FAISS index and metadata
-def load_faiss_index():
-    try:
-        index = faiss.read_index('image_index.faiss')
-        image_metadata = np.load('image_metadata.npz')
-        image_names = image_metadata['names']
-        print(f"Loaded {len(image_names)} image names.")
-        print(f"FAISS index size: {index.ntotal}")
-        return index, image_names
-    except Exception as e:
-        print(f"Error loading FAISS index or metadata: {e}")
-        raise HTTPException(status_code=500, detail="Error loading FAISS index or metadata")
+# def load_faiss_index():
+#     try:
+#         index = faiss.read_index('image_index.faiss')
+#         image_metadata = np.load('image_metadata.npz')
+#         image_names = image_metadata['names']
+#         print(f"Loaded {len(image_names)} image names.")
+#         print(f"FAISS index size: {index.ntotal}")
+#         return index, image_names
+#     except Exception as e:
+#         print(f"Error loading FAISS index or metadata: {e}")
+#         raise HTTPException(status_code=500, detail="Error loading FAISS index or metadata")
 
 # Define the preprocess pipeline using targetpad_transform
 def create_preprocess_pipeline(target_ratio=1.25):
@@ -70,11 +104,11 @@ def preprocess_image(image_bytes, preprocess):
         raise HTTPException(status_code=400, detail=f"Error processing image: {e}")
 
 # Preprocess and encode text
-def preprocess_text(text):
+def preprocess_text(text, model):
     if text:
         text_tokens = clip.tokenize([text]).to(device)
         with torch.no_grad():
-            text_features = clip_model.encode_text(text_tokens)
+            text_features = model.encode_text(text_tokens)
         return text_features
     else:
         raise HTTPException(status_code=400, detail="No text provided.")
@@ -118,7 +152,7 @@ def predict(image_bytes, text, combiner, index, image_names, preprocess):
     image_features = preprocess_image(image_bytes, preprocess)
 
     # Encode the text
-    text_features = preprocess_text(text)
+    text_features = preprocess_text(text, clip_model)
 
     # Combine features
     combined_features = combine_features(image_features, text_features, combiner)
@@ -133,55 +167,94 @@ def predict(image_bytes, text, combiner, index, image_names, preprocess):
     top_images = get_top_images(image_names, D, I)
     return top_images
 
+# Load the FAISS index and metadata
+def load_faiss_index(index_path, metadata_path):
+    try:
+        index = faiss.read_index(index_path)
+        image_metadata = np.load(metadata_path)
+        image_names = image_metadata['names']
+        print(f"Loaded {len(image_names)} image names.")
+        print(f"FAISS index size: {index.ntotal}")
+        return index, image_names
+    except Exception as e:
+        print(f"Error loading FAISS index or metadata: {e}")
+        raise HTTPException(status_code=500, detail="Error loading FAISS index or metadata")
 
 # Initialize models and index on startup
 @app.on_event("startup")
 async def startup():
-    global clip_model, preprocess, combiner, index, image_names
+    global clip_model, preprocess, combiner, index, image_names, fine_tuned_clip_model, fine_tuned_preprocess, fine_tuned_index, fine_tuned_image_names
     clip_model, preprocess = load_clip_model()
+    fine_tuned_clip_model, fine_tuned_preprocess = load_fine_tuned_clip_model()
     combiner = load_combiner()
-    index, image_names = load_faiss_index()
+    fine_tuned_index, fine_tuned_image_names = load_faiss_index(fine_tuned_index_path, fine_tuned_metadata_path)
+    index, image_names = load_faiss_index('image_index.faiss', 'image_metadata.npz')
     print("Models and index loaded successfully.")
 
 # Define the API endpoint for prediction
 @app.post("/predict/")
-async def predict_endpoint(file: UploadFile = File(...), text: str = Form(...)):
+async def predict_endpoint(
+    file: Optional[UploadFile] = File(None),  # Make file optional
+    text: Optional[str] = Form(None)         # Make text optional
+):
     try:
-        # Log that the endpoint is being hit
+        # Validate input
+        if not file and not text:
+            raise HTTPException(status_code=400, detail="At least one input is required: file (image) or text.")
+
+        # Log that the endpoint is hit
         print("Endpoint '/predict/' hit")
         print(f"Received text input: {text}")
 
-        # Read the uploaded file
-        image_bytes = await file.read()
-        print(f"File received: {file.filename}, size: {len(image_bytes)} bytes")
-
-        # Perform prediction
-        if text.strip():
-            # Process both image and text
-            top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
-        else:
-            # Process only the image
-            print("Text is empty, processing only the image.")
-            # Preprocess the image
-            image_features = preprocess_image(image_bytes, preprocess)
-            print("Image features extracted.")
-
+        if text and not file:
+            print(f"Received text input only: {text}")
+            # Encode text
+            text_features = preprocess_text(text, fine_tuned_clip_model)
             # Normalize the query vector
-            query_vector = normalize_query_vector(image_features)
-            print("Query vector normalized.")
+            query_vector = normalize_query_vector(text_features)
+            # Search FAISS index
+            D, I = search_faiss_index(fine_tuned_index, query_vector)
+            print("FAISS index searched for text query.")
+            # Retrieve top images
+            top_images = get_top_images(fine_tuned_image_names, D, I)
+            print("Top images retrieved for text query.")
+            return {"top_images": [(name, float(score)) for name, score in top_images]}
+        
+        else: 
+            try:
+                # Read the uploaded file
+                image_bytes = await file.read()
+                print(f"File received: {file.filename}, size: {len(image_bytes)} bytes")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error reading uploaded file: {e}")
 
-            # Search FAISS index for the top images
-            D, I = search_faiss_index(index, query_vector)
-            print("FAISS index searched.")
+            # Perform prediction
+            if text.strip():
+                # Process both image and text
+                top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
+            else:
+                # Process only the image
+                print("Text is empty, processing only the image.")
+                # Preprocess the image
+                image_features = preprocess_image(image_bytes, preprocess)
+                print("Image features extracted.")
 
-            # Retrieve the top images
-            top_images = get_top_images(image_names, D, I)
-            print("Top images retrieved.")
+                # Normalize the query vector
+                query_vector = normalize_query_vector(image_features)
+                print("Query vector normalized.")
 
-        # Convert numpy.float32 to float
-        top_images = [(name, float(score)) for name, score in top_images]
-        print("Prediction successful")
-        return {"top_images": top_images}
+                # Search FAISS index for the top images
+                D, I = search_faiss_index(index, query_vector)
+                print("FAISS index searched.")
+
+                # Retrieve the top images
+                top_images = get_top_images(image_names, D, I)
+                print("Top images retrieved.")
+
+            # Convert numpy.float32 to float
+            top_images = [(name, float(score)) for name, score in top_images]
+            print("Prediction successful")
+            return {"top_images": top_images}
     except Exception as e:
         print(f"Error during prediction: {e}")
         raise HTTPException(status_code=500, detail=str(e))

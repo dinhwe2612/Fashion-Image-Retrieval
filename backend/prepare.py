@@ -43,7 +43,7 @@ def vectorize_images(image_folder):
                 print(f"Error processing file {image_path}: {e}")
         
         print(f"Processed {len(image_names)} images", end="\r")
-        if len(image_names) >= 2000:  # Limit to 256 images
+        if len(image_names) >= 2000:  # Limit to 2000 images
             break
     return image_names, np.vstack(image_features)
 

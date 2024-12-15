@@ -147,7 +147,7 @@ def get_top_images(image_names, D, I, k=10):
     return top_images
 
 # Main prediction function
-def predict(image_bytes, text, combiner, index, image_names, preprocess):
+def predict(image_bytes, text, combiner, index, image_names, preprocess, k):
     # Preprocess the image
     image_features = preprocess_image(image_bytes, preprocess)
 
@@ -164,7 +164,7 @@ def predict(image_bytes, text, combiner, index, image_names, preprocess):
     D, I = search_faiss_index(index, query_vector)
 
     # Get and return the top images
-    top_images = get_top_images(image_names, D, I)
+    top_images = get_top_images(image_names, D, I, k)
     return top_images
 
 # Load the FAISS index and metadata
@@ -195,7 +195,8 @@ async def startup():
 @app.post("/predict/")
 async def predict_endpoint(
     file: Optional[UploadFile] = File(None),  # Make file optional
-    text: Optional[str] = Form(None)         # Make text optional
+    text: Optional[str] = Form(None),         # Make text optional
+    k: int = Form(10)  # Default to top 10 results
 ):
     try:
         # Validate input
@@ -216,7 +217,7 @@ async def predict_endpoint(
             D, I = search_faiss_index(fine_tuned_index, query_vector)
             print("FAISS index searched for text query.")
             # Retrieve top images
-            top_images = get_top_images(fine_tuned_image_names, D, I)
+            top_images = get_top_images(fine_tuned_image_names, D, I, k=k)
             print("Top images retrieved for text query.")
             return {"top_images": [(name, float(score)) for name, score in top_images]}
         
@@ -231,7 +232,7 @@ async def predict_endpoint(
             # Perform prediction
             if text.strip():
                 # Process both image and text
-                top_images = predict(image_bytes, text, combiner, index, image_names, preprocess)
+                top_images = predict(image_bytes, text, combiner, index, image_names, preprocess, k=k)
             else:
                 # Process only the image
                 print("Text is empty, processing only the image.")
@@ -248,7 +249,7 @@ async def predict_endpoint(
                 print("FAISS index searched.")
 
                 # Retrieve the top images
-                top_images = get_top_images(image_names, D, I)
+                top_images = get_top_images(image_names, D, I, k=k)
                 print("Top images retrieved.")
 
             # Convert numpy.float32 to float

@@ -10,6 +10,11 @@ from combiner import Combiner
 from data_utils import targetpad_transform
 import base64
 from typing import Optional
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# Define the image directory path
+IMAGE_DIR = "../backend/FashionIQ/resized_images"
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Needed for FAISS on Windows
 
@@ -26,6 +31,15 @@ fine_tuned_model_path = "fine_tuned_models/tuned_clip_best.pt"
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Allow CORS for specific origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # React frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all HTTP headers
+)
 
 # Load Fine-Tuned CLIP model
 def load_fine_tuned_clip_model():
@@ -143,7 +157,7 @@ def search_faiss_index(index, query_vector, k=10):
 
 # Get the top k ranked images and their similarity scores
 def get_top_images(image_names, D, I, k=10):
-    top_images = [(image_names[i], D[0][j]) for j, i in enumerate(I[0])]
+    top_images = [(image_names[i], D[0][j]) for j, i in enumerate(I[0][:k])]
     return top_images
 
 # Main prediction function
@@ -161,7 +175,7 @@ def predict(image_bytes, text, combiner, index, image_names, preprocess, k):
     query_vector = normalize_query_vector(combined_features)
 
     # Search FAISS index
-    D, I = search_faiss_index(index, query_vector)
+    D, I = search_faiss_index(index, query_vector, k)
 
     # Get and return the top images
     top_images = get_top_images(image_names, D, I, k)
@@ -214,7 +228,7 @@ async def predict_endpoint(
             # Normalize the query vector
             query_vector = normalize_query_vector(text_features)
             # Search FAISS index
-            D, I = search_faiss_index(fine_tuned_index, query_vector)
+            D, I = search_faiss_index(fine_tuned_index, query_vector, k)
             print("FAISS index searched for text query.")
             # Retrieve top images
             top_images = get_top_images(fine_tuned_image_names, D, I, k=k)
@@ -245,7 +259,7 @@ async def predict_endpoint(
                 print("Query vector normalized.")
 
                 # Search FAISS index for the top images
-                D, I = search_faiss_index(index, query_vector)
+                D, I = search_faiss_index(index, query_vector, k)
                 print("FAISS index searched.")
 
                 # Retrieve the top images
@@ -259,6 +273,9 @@ async def predict_endpoint(
     except Exception as e:
         print(f"Error during prediction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+# Mount the static directory to serve images
+app.mount("/images", StaticFiles(directory=IMAGE_DIR), name="images")
 
 # Run the app
 if __name__ == "__main__":

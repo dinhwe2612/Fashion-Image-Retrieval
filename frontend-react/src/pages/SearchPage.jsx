@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import axios from "axios";
 
 const FashionSearch = () => {
+  const [currentQuery, setCurrentQuery] = useState(null)
+  const [isEvaluating, SetIsEvaluating] = useState(false);
   const [topK, setTopK] = useState(10); // Default to 10 results
   const [previewImage, setPreviewImage] = useState(null);
   const [imageFile, setImageFile] = useState(null);
@@ -10,6 +12,109 @@ const FashionSearch = () => {
   const [keyword, setKeyword] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false); // New loading state
+  const [selectedImages, setSelectedImages] = useState([]);
+  const [unselectedImages, setUnselectedIamges] = useState([])
+
+  const handleSelection = (imageName) => {
+    setSelectedImages((prev) =>
+      prev.includes(imageName)
+        ? prev.filter((item) => item !== imageName) // Remove if already selected
+        : [...prev, imageName] // Add if not selected
+    );
+  };
+
+  useEffect(() => {
+    // Ensure unselectedImages includes all searchResults if no images are selected
+    const unselected = searchResults.length > 0
+      ? searchResults
+          .map(([imageName]) => imageName) // Extract image names from searchResults
+          .filter((imageName) => !selectedImages.includes(imageName)) // Exclude selected images
+      : []; // Handle empty searchResults gracefully
+  
+    setUnselectedIamges(unselected);
+  }, [selectedImages, searchResults]); // Depend on both selectedImages and searchResults  
+
+  useEffect(() => {
+    setSearchResults([]);
+    setCurrentQuery({keyword: keyword, imageFile: imageFile});
+  }, [keyword, imageFile]);  
+
+  const blobToBase64 = (blob) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };  
+
+  const sendFeedbackToServer = async () => {
+    if (selectedImages.length > 0) {
+      try {
+        // Compute unselected images
+        // const unselectedImages = searchResults
+        //   .map(([imageName]) => imageName)
+        //   .filter((imageName) => !selectedImages.includes(imageName));
+  
+        // Update the currentQuery to include the feedback iteration
+        setCurrentQuery((prevQuery) => {
+          const updatedQuery = {
+            ...prevQuery,
+            feedback: [
+              ...(prevQuery?.feedback || []),
+              { selected: selectedImages, unselected: unselectedImages },
+            ],
+          };
+          console.log("Updated currentQuery:", updatedQuery);
+          return updatedQuery;
+        });
+  
+        // Prepare FormData
+        const formData = new FormData();
+        formData.append("k", topK);
+  
+        if (imageFile) {
+          formData.append("imageFile", imageFile); // Append image file
+        }
+  
+        formData.append("keyword", keyword || ""); // Append keyword (can be empty)
+  
+        // Append feedback data as JSON string
+        const feedbackPayload = JSON.stringify({
+          keyword,
+          imageFile: null, // Only the file is sent separately
+          feedback: [
+            ...(currentQuery?.feedback || []),
+            { selected: selectedImages, unselected: unselectedImages },
+          ],
+        });
+        formData.append("current_query", feedbackPayload);
+  
+        // Set loading state and clear search results
+        setLoading(true);
+        setSearchResults([]);
+  
+        // Send feedback to the server
+        const response = await axios.post("http://localhost:8000/feedback/", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+  
+        // Update the search results with the updated results from the server
+        setSearchResults(response.data.updated_results);
+  
+        // Clear the selected images after sending feedback
+        setSelectedImages([]);
+        // alert("Feedback successfully submitted!");
+      } catch (error) {
+        console.error("Error sending feedback:", error);
+        alert("Failed to submit feedback. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      alert("Please select at least one image to provide feedback.");
+    }
+  };    
 
   const API_URL = "http://localhost:8000/predict/";
 
@@ -43,7 +148,7 @@ const FashionSearch = () => {
   
       const results = response.data;
       setSearchResults(results.top_images);
-      console.log("Search Results:", results.top_images);
+      // console.log("Search Results:", results.top_images);
     } catch (error) {
       console.error("Error contacting backend:", error);
       alert("An error occurred while fetching results.");
@@ -62,7 +167,7 @@ const FashionSearch = () => {
     <div className="min-h-screen flex flex-col bg-gray-100">
       {/* Header */}
       <header className="flex justify-between items-center bg-white px-6 py-4 shadow-md">
-        <h1 className="font-bold text-lg">🛍️ Fashion Image Retrieval</h1>
+        <h1 className="font-bold text-2xl">🛍️ Fashion Image Retrieval</h1>
         <div className="relative w-1/3">
           <input
             type="text"
@@ -141,6 +246,28 @@ const FashionSearch = () => {
         <h2 className="text-xl font-semibold mb-4">
           {keyword && <>Results for <span className="text-blue-500">"{keyword}"</span></>}
         </h2>
+        <h2 className="text-right text-md mb-4 text-gray-500">
+          {searchResults.length > 0 && (
+            <>Not satisfied?  
+              {searchResults.length > 0 ?
+                (<a onClick={
+                  async () => {
+                    if (!isEvaluating) {
+                      // setSelectedImages([])
+                    }
+                    else {
+                      await sendFeedbackToServer();
+                    }
+                    SetIsEvaluating(!isEvaluating)
+                  }
+                } className="text-blue-500 hover:underline cursor-pointer">{
+                  isEvaluating ? (<> Done Feedback</>) : (<> Feedback</>)
+                }</a>)
+                : (<div></div>)
+              }
+            </>
+          )}
+        </h2>
 
         {/* Loading Spinner */}
         {loading ? (
@@ -153,6 +280,7 @@ const FashionSearch = () => {
             {searchResults.length > 0 ? (
               searchResults.map((item, index) => {
                 const [imageName, score] = item;
+                const isSelected = selectedImages.includes(imageName);
                 return (
                   <div
                     key={index}
@@ -166,9 +294,19 @@ const FashionSearch = () => {
                       alt={`Result ${index + 1}`}
                       className="w-full h-full object-cover"
                     />
-                    {/* <div className="p-2 text-center">
-                      <p className="font-semibold">Score: {score.toFixed(2)}</p>
-                    </div> */}
+                    {isEvaluating && (
+                      <div
+                        className="absolute top-2 right-2 w-6 h-6 bg-white border-2 border-green-300 rounded-full flex items-center justify-center"
+                        onClick={(e) => {
+                          e.stopPropagation(); 
+                          handleSelection(imageName);
+                        }}
+                      >
+                        {isSelected && (
+                          <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })

@@ -160,6 +160,21 @@ def get_top_images(image_names, D, I, k=10):
     top_images = [(image_names[i], D[0][j]) for j, i in enumerate(I[0][:k])]
     return top_images
 
+def compute_combined_query_vector(image_bytes, text, combiner, index, image_names, preprocess, k):
+    # Preprocess the image
+    image_features = preprocess_image(image_bytes, preprocess)
+
+    # Encode the text
+    text_features = preprocess_text(text, clip_model)
+
+    # Combine features
+    combined_features = combine_features(image_features, text_features, combiner)
+
+    # Normalize the query vector
+    query_vector = normalize_query_vector(combined_features)
+
+    return query_vector
+
 # Main prediction function
 def predict(image_bytes, text, combiner, index, image_names, preprocess, k):
     # Preprocess the image
@@ -182,17 +197,36 @@ def predict(image_bytes, text, combiner, index, image_names, preprocess, k):
     return top_images
 
 # Load the FAISS index and metadata
+# def load_faiss_index(index_path, metadata_path):
+#     try:
+#         index = faiss.read_index(index_path)
+#         image_metadata = np.load(metadata_path)
+#         image_names = image_metadata['names']
+#         print(f"Loaded {len(image_names)} image names.")
+#         print(f"FAISS index size: {index.ntotal}")
+#         return index, image_names
+#     except Exception as e:
+#         print(f"Error loading FAISS index or metadata: {e}")
+#         raise HTTPException(status_code=500, detail="Error loading FAISS index or metadata")
 def load_faiss_index(index_path, metadata_path):
     try:
+        # Load the FAISS index
         index = faiss.read_index(index_path)
+
+        # Enable the direct map
+        index.make_direct_map()
+
+        # Load metadata
         image_metadata = np.load(metadata_path)
         image_names = image_metadata['names']
         print(f"Loaded {len(image_names)} image names.")
         print(f"FAISS index size: {index.ntotal}")
+
         return index, image_names
     except Exception as e:
         print(f"Error loading FAISS index or metadata: {e}")
         raise HTTPException(status_code=500, detail="Error loading FAISS index or metadata")
+
 
 # Initialize models and index on startup
 @app.on_event("startup")
@@ -272,6 +306,132 @@ async def predict_endpoint(
             return {"top_images": top_images}
     except Exception as e:
         print(f"Error during prediction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+def construct_query_vector(current_query, feedback, index, image_names):
+    alpha = 1.0  # Tunable weight for the initial query
+    beta = 0.75  # Tunable weight for relevant documents
+    gamma = 0.25  # Tunable weight for irrelevant documents
+
+    relevant_images = feedback.selected
+    irrelevant_images = feedback.unselected
+
+    # Retrieve relevant and irrelevant image features
+    def get_image_features(image_list):
+        features = []
+        for image_name in image_list:
+            # Assume FAISS index metadata maps image names to their indices
+            index_position = np.where(image_names == image_name)[0]
+            if len(index_position) > 0:
+                # Fetch the stored feature vector for this image
+                features.append(index.reconstruct(int(index_position[0])))
+        return np.array(features)
+
+    Dr_features = get_image_features(relevant_images)  # Relevant features
+    Dn_features = get_image_features(irrelevant_images)  # Irrelevant features
+
+    # Start with the initial query
+    new_query_features = alpha * current_query
+
+    # Add relevant features if any exist
+    if Dr_features.size > 0:
+        Dr_mean = np.mean(Dr_features, axis=0)  # Compute the centroid
+        new_query_features += beta * Dr_mean
+
+    # Subtract irrelevant features if any exist
+    if Dn_features.size > 0:
+        Dn_mean = np.mean(Dn_features, axis=0)  # Compute the centroid
+        new_query_features -= gamma * Dn_mean
+
+    # Normalize the final query vector
+    faiss.normalize_L2(new_query_features)
+
+    return new_query_features
+
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+import json
+
+class FeedbackIteration(BaseModel):
+    selected: List[str]
+    unselected: List[str]
+
+class CurrentQuery(BaseModel):
+    keyword: Optional[str]
+    imageFile: Optional[str]  # File is sent separately, so it's optional
+    feedback: List[FeedbackIteration]
+
+@app.post("/feedback/")
+async def feedback_endpoint(
+    k: int = Form(...),
+    imageFile: Optional[UploadFile] = File(None),
+    keyword: Optional[str] = Form(""),
+    current_query: str = Form(...)
+):
+    try:
+        # Parse `current_query` JSON string into a dictionary
+        current_query_dict = json.loads(current_query)
+        current_query = CurrentQuery(**current_query_dict)
+
+        # Get feedback list
+        feedback_list = current_query.feedback
+
+        # Initialize query_vector
+        textOnly = False
+        query_vector = None
+
+        # Process text-only input
+        if keyword and not imageFile:
+            textOnly = True
+            print(f"Received text input only: {keyword}")
+            text_features = preprocess_text(keyword, fine_tuned_clip_model)
+            query_vector = normalize_query_vector(text_features)
+
+        # Process image input
+        elif imageFile:
+            print(f"Received image file: {imageFile.filename}")
+            image_bytes = await imageFile.read()
+            image_features = preprocess_image(image_bytes, preprocess)
+            query_vector = normalize_query_vector(image_features)
+
+            # Combine with text if present
+            if keyword:
+                combined_features = combine_features(
+                    image_features,
+                    preprocess_text(keyword, clip_model),
+                    combiner
+                )
+                query_vector = normalize_query_vector(combined_features)
+
+        # Apply feedback iterations
+        for feedback_iteration in feedback_list:
+            if textOnly:
+                query_vector = construct_query_vector(
+                    query_vector,
+                    feedback_iteration,
+                    fine_tuned_index,
+                    fine_tuned_image_names
+                )
+            else:
+                query_vector = construct_query_vector(
+                    query_vector,
+                    feedback_iteration,
+                    index,
+                    image_names
+                )
+
+        # Perform search with the revised query vector
+        if textOnly:
+            D, I = search_faiss_index(fine_tuned_index, query_vector, k)
+            updated_results = get_top_images(fine_tuned_image_names, D, I, k)
+        else:
+            D, I = search_faiss_index(index, query_vector, k)
+            updated_results = get_top_images(image_names, D, I, k)
+
+        return {"updated_results": [(name, float(score)) for name, score in updated_results]}
+
+    except Exception as e:
+        print(f"Error processing feedback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 # Mount the static directory to serve images

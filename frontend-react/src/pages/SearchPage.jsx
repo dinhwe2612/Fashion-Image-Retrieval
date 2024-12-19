@@ -202,7 +202,7 @@ const FashionSearch = () => {
           onChange={(e) => setModel(e.target.value)}
         >
           <option value="FashionIQ">FashionIQ</option>
-          {/* <option value="Fashion200K">Fashion200K</option> */}
+          <option value="Fashion200K">Fashion200K</option>
         </select>
       </header>
 

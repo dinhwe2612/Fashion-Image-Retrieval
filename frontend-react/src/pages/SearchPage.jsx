@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { IoMdAdd } from "react-icons/io";
+import AddNewReference from "./AddNewReference";
 import axios from "axios";
 
 const FashionSearch = () => {
@@ -14,6 +16,7 @@ const FashionSearch = () => {
   const [loading, setLoading] = useState(false); // New loading state
   const [selectedImages, setSelectedImages] = useState([]);
   const [unselectedImages, setUnselectedIamges] = useState([])
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const handleSelection = (imageName) => {
     setSelectedImages((prev) =>
@@ -162,9 +165,18 @@ const FashionSearch = () => {
     setImageFile(null);
     document.getElementById("fileUpload").value = "";
   };
-
+  
+  const handleAddRef = (uploadedFiles) => {
+    if (uploadedFiles.length > 0) {
+      console.log("Uploaded files:", uploadedFiles);
+      alert("Successfully added references!");
+    } else {
+      console.log("No files uploaded.");
+    }
+    setIsModalOpen(false); // Close modal
+  };
   return (
-    <div className="min-h-screen flex flex-col bg-gray-100">
+    <div className="h-screen w-screen flex flex-col bg-gray-100">
       {/* Header */}
       <header className="flex justify-between items-center bg-white px-6 py-4 shadow-md">
         <h1 className="font-bold text-2xl">🛍️ Fashion Image Retrieval</h1>
@@ -197,13 +209,27 @@ const FashionSearch = () => {
             <option value={50}>Top 50</option>
           </select>
         </div>
-        <select
-          className="border border-gray-300 rounded-lg px-3 py-2 focus:ring"
-          onChange={(e) => setModel(e.target.value)}
-        >
-          <option value="FashionIQ">FashionIQ</option>
-          <option value="Fashion200K">Fashion200K</option>
-        </select>
+        <div>
+          <span className="text-gray-700 font-semibold mr-2">Dataset:</span>
+          <select
+            className="border border-gray-300 rounded-lg py-2 focus:ring text-left"
+            onChange={(e) => setModel(e.target.value)}
+          >
+            <option value="FashionIQ">FashionIQ</option>
+            <option value="Add">
+              Add new dataset
+            </option>
+          </select>
+        </div>
+        <div className="flex items-center">
+          <IoMdAdd className="text-gray-700 mr-2" />
+          <span 
+            className="text-gray-700 font-semibold hover:text-black cursor-pointer"
+            onClick={() => setIsModalOpen(true)}
+          >
+            Add new reference
+          </span>
+        </div>
       </header>
 
       {/* Media Upload Section */}
@@ -337,6 +363,12 @@ const FashionSearch = () => {
             </button>
           </div>
         </div>
+      )}
+      {isModalOpen && (
+        <AddNewReference onClose={(upload) => {
+           console.log("Upload", upload);
+           handleAddRef(upload)
+        }} />
       )}
     </div>
   );

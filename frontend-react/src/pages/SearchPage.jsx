@@ -21,6 +21,12 @@ const FashionSearch = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDatasetModalOpen, setIsDatasetModalOpen] = useState(false);
 
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter") {
+      handleSearch(); // Trigger search when Enter key is pressed
+    }
+  };
+
   const handleAddDataset = async (newDataset) => {
     if (!newDataset || !newDataset.name || !newDataset.files || newDataset.files.length === 0) {
       alert("Please provide a valid dataset name and files.");
@@ -253,6 +259,7 @@ const FashionSearch = () => {
             placeholder="Search"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
+            onKeyPress={handleKeyPress} // Listen for Enter key press
             className="w-full border border-gray-300 rounded-lg py-2 pl-4 pr-10 focus:outline-none"
           />
           <button
@@ -351,7 +358,7 @@ const FashionSearch = () => {
         </h2>
         <h2 className="text-right text-md mb-4 text-gray-500">
           {searchResults.length > 0 && (
-            <>Not satisfied?  
+            <>{isEvaluating ? (<> Have selected all the relevant images?</>) : (<> Not satisfied?</>)}  
               {searchResults.length > 0 ?
                 (<a onClick={
                   async () => {

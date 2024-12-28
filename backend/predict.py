@@ -341,14 +341,22 @@ async def startup():
     fine_tuned_datasets["FashionIQ"] = {"index": fine_tuned_index, "names": fine_tuned_image_names}
     print("Models and index loaded successfully.")
 
+from typing import Union, Optional
+
 # Define the API endpoint for prediction
 @app.post("/predict/")
 async def predict_endpoint(
     file: Optional[UploadFile] = File(None),  # Make file optional
     text: Optional[str] = Form(None),         # Make text optional
-    k: int = Form(10),  # Default to top 10 results
+    k: Union[str, int] = Form(10),            # Allow k to be string or int, default to 10
     dataset: str = Form(...)                  # Dataset name is required
 ):
+    # Parse k to an integer if it's a string
+    try:
+        k = int(k)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Parameter 'k' must be an integer or a string that can be converted to an integer.")
+    
     print(file, text, k, dataset)
     # Ensure the dataset exists
     if dataset not in datasets or dataset not in fine_tuned_datasets:
@@ -469,8 +477,8 @@ class FeedbackIteration(BaseModel):
     unselected: List[str]
 
 class CurrentQuery(BaseModel):
-    keyword: Optional[str]
-    imageFile: Optional[str]  # File is sent separately, so it's optional
+    # keyword: Optional[str]
+    # imageFile: Optional[str]  # File is sent separately, so it's optional
     feedback: List[FeedbackIteration]
 
 @app.post("/feedback/")

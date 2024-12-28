@@ -349,6 +349,7 @@ async def predict_endpoint(
     k: int = Form(10),  # Default to top 10 results
     dataset: str = Form(...)                  # Dataset name is required
 ):
+    print(file, text, k, dataset)
     # Ensure the dataset exists
     if dataset not in datasets or dataset not in fine_tuned_datasets:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset}' not found.")

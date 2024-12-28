@@ -18,8 +18,8 @@ const AddNewReference = ({onClose}) =>{
     if (inputElement) inputElement.value = ""; // Clear the file input to allow re-uploading the same file
   };
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white p-6 rounded-lg shadow-lg w-3/4 max-h-[80vh] overflow-hidden">
+    <div className="fixed inset-0 bg-white bg-opacity-50 flex items-center justify-center z-50 shadow-lg">
+      <div className="bg-white p-6 rounded-lg w-3/4 max-h-[80vh] overflow-hidden">
         <h2 className="text-xl font-bold mb-4">Upload Images</h2>
 
         {/* File Upload Input */}
@@ -47,7 +47,7 @@ const AddNewReference = ({onClose}) =>{
                   <img
                     src={URL.createObjectURL(file)} // Create a URL for the image
                     alt={`Uploaded ${index + 1}`}
-                    className="w-full h-28 object-cover rounded-lg shadow"
+                    className="w-full h-auto object-cover rounded-lg shadow"
                   />
                   {/* Remove Image Button */}
                   <button

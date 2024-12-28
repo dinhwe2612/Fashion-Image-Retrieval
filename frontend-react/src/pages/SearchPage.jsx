@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { IoMdAdd } from "react-icons/io";
 import AddNewReference from "./AddNewReference";
 import axios from "axios";
+import AddDatasetModal from "./AddNewDataset";
 
 const FashionSearch = () => {
+  const [datasets, setDatasets] = useState(["FashionIQ"]);
   const [currentQuery, setCurrentQuery] = useState(null)
   const [isEvaluating, SetIsEvaluating] = useState(false);
   const [topK, setTopK] = useState(10); // Default to 10 results
@@ -17,6 +19,43 @@ const FashionSearch = () => {
   const [selectedImages, setSelectedImages] = useState([]);
   const [unselectedImages, setUnselectedIamges] = useState([])
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDatasetModalOpen, setIsDatasetModalOpen] = useState(false);
+
+  const handleAddDataset = async (newDataset) => {
+    if (!newDataset || !newDataset.name || !newDataset.files || newDataset.files.length === 0) {
+      alert("Please provide a valid dataset name and files.");
+      return;
+    }
+  
+    const formData = new FormData();
+    formData.append("dataset_name", newDataset.name);
+  
+    // Append each file to the form data
+    newDataset.files.forEach((file) => {
+      formData.append("files", file);
+    });
+  
+    try {
+      const CREATE_DATASET_URL = "http://localhost:8000/create_dataset/"; 
+      const response = await axios.post(CREATE_DATASET_URL, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+  
+      if (response.status === 200 && response.data.message) {
+        // Add the new dataset to the dropdown and set it as the selected dataset
+        setDatasets((prev) => [...prev, newDataset.name]);
+        setModel(newDataset.name);
+        alert(`Dataset "${newDataset.name}" added successfully!`);
+      } else {
+        alert("Failed to add the dataset. Please try again.");
+      }
+    } catch (error) {
+      console.error("Error while creating the dataset:", error);
+      alert("An error occurred while adding the dataset. Please try again.");
+    } finally {
+      setIsDatasetModalOpen(false); // Close the modal
+    }
+  };  
 
   const handleSelection = (imageName) => {
     setSelectedImages((prev) =>
@@ -144,6 +183,7 @@ const FashionSearch = () => {
       if (imageFile) formData.append("file", imageFile);
       formData.append("text", keyword);
       formData.append("k", topK); // Add Top K value to request
+      formData.append("dataset", model); // Add Top K value to request
   
       const response = await axios.post(API_URL, formData, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -166,15 +206,41 @@ const FashionSearch = () => {
     document.getElementById("fileUpload").value = "";
   };
   
-  const handleAddRef = (uploadedFiles) => {
-    if (uploadedFiles.length > 0) {
-      console.log("Uploaded files:", uploadedFiles);
-      alert("Successfully added references!");
-    } else {
+  const handleAddRef = async (uploadedFiles) => {
+    if (uploadedFiles.length === 0) {
       console.log("No files uploaded.");
+      alert("Please upload at least one file.");
+      return;
     }
-    setIsModalOpen(false); // Close modal
+  
+    const formData = new FormData();
+  
+    // Append files to FormData
+    uploadedFiles.forEach((file) => {
+      formData.append("files", file);
+    });
+  
+    // Append dataset name
+    formData.append("dataset_name", model); // `model` should represent the currently selected dataset
+  
+    try {
+      const API_URL = "http://localhost:8000/append_to_dataset/";
+      const response = await axios.post(API_URL, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+  
+      // Handle success
+      console.log("API response:", response.data);
+      alert(`Successfully added ${response.data.image_count} new references to dataset "${model}"!`);
+    } catch (error) {
+      // Handle error
+      console.error("Error appending references:", error);
+      alert("An error occurred while adding references. Please try again.");
+    } finally {
+      setIsModalOpen(false); // Close modal
+    }
   };
+  
   return (
     <div className="h-screen w-screen flex flex-col bg-gray-100">
       {/* Header */}
@@ -212,15 +278,25 @@ const FashionSearch = () => {
         <div>
           <span className="text-gray-700 font-semibold mr-2">Dataset:</span>
           <select
-            className="border border-gray-300 rounded-lg py-2 focus:ring text-left"
-            onChange={(e) => setModel(e.target.value)}
+            value={model}
+            onChange={(e) => {
+              if (e.target.value === "Add") {
+                setIsDatasetModalOpen(true);
+              } else {
+                setModel(e.target.value);
+              }
+            }}
+            className="border border-gray-300 rounded-lg py-2 px-3 focus:ring text-left"
           >
-            <option value="FashionIQ">FashionIQ</option>
-            <option value="Add">
-              Add new dataset
-            </option>
+            {datasets.map((dataset, index) => (
+              <option key={index} value={dataset}>
+                {dataset}
+              </option>
+            ))}
+            <option value="Add">+ Add new dataset</option>
           </select>
         </div>
+        {isModalOpen && <AddDatasetModal onClose={handleAddDataset} />}
         <div className="flex items-center">
           <IoMdAdd className="text-gray-700 mr-2" />
           <span 
@@ -312,11 +388,11 @@ const FashionSearch = () => {
                     key={index}
                     className="relative border rounded-lg overflow-hidden shadow hover:shadow-lg cursor-pointer"
                     onClick={() =>
-                      setExpandedImage(`http://localhost:8000/images/${imageName}`)
+                      setExpandedImage(`http://localhost:8000/images/${model}/${imageName}`)
                     }
                   >
                     <img
-                      src={`http://localhost:8000/images/${imageName}`}
+                      src={`http://localhost:8000/images/${model}/${imageName}`}
                       alt={`Result ${index + 1}`}
                       className="w-full h-full object-cover"
                     />
@@ -368,6 +444,17 @@ const FashionSearch = () => {
         <AddNewReference onClose={(upload) => {
            console.log("Upload", upload);
            handleAddRef(upload)
+        }} />
+      )}
+      {isDatasetModalOpen && (
+        <AddDatasetModal onClose={(upload) => {
+          if (upload) {
+            console.log("Upload", upload);
+            handleAddDataset(upload)
+          }
+          else {
+            setIsDatasetModalOpen(false)
+          }
         }} />
       )}
     </div>

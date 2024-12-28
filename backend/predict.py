@@ -12,6 +12,103 @@ import base64
 from typing import Optional
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image, ImageOps
+import torch
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+import json
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Helper function for resizing images
+def resize_image(in_image: Image.Image, target_ratio: float, dim: int) -> Image.Image:
+    w, h = in_image.size
+    aspect_ratio = max(w, h) / min(w, h)
+    if aspect_ratio < target_ratio:
+        out_image = in_image
+    else:
+        scaled_max_wh = max(w, h) / target_ratio
+        hp = max((scaled_max_wh - w) // 2, 0)
+        vp = max((scaled_max_wh - h) // 2, 0)
+        padding = (int(hp), int(vp), int(hp), int(vp))
+        out_image = ImageOps.expand(in_image, border=padding, fill=0)
+    out_image = out_image.resize((dim, dim), Image.Resampling.LANCZOS)
+    return out_image
+
+def create_faiss_index(image_folder, clip_model, preprocess, index_path, metadata_path):
+    """
+    Creates a FAISS index and metadata for the images in the specified folder.
+
+    Args:
+        image_folder (str): Path to the folder containing images.
+        clip_model: Preloaded CLIP model.
+        preprocess: Preprocessing function for the CLIP model.
+        index_path (str): Path to save the FAISS index.
+        metadata_path (str): Path to save the metadata.
+
+    Returns:
+        index: Trained FAISS index.
+        image_names: List of image names indexed.
+    """
+    image_names = []
+    image_features = []
+
+    # Process images
+    for image_name in os.listdir(image_folder):
+        image_path = os.path.join(image_folder, image_name)
+        if os.path.isfile(image_path) and not image_name.startswith('._'):
+            try:
+                # Preprocess and vectorize the image
+                image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    image_feature = clip_model.encode_image(image).cpu().numpy()
+                image_names.append(image_name)
+                image_features.append(image_feature)
+            except UnidentifiedImageError:
+                print(f"Skipping invalid image file: {image_name}")
+            except Exception as e:
+                print(f"Error processing image {image_name}: {e}")
+
+    # Check if any valid images were processed
+    if not image_features:
+        raise HTTPException(status_code=400, detail="No valid images found for indexing.")
+
+    # Convert features to NumPy array
+    image_features = np.vstack(image_features).astype(np.float32)
+
+    # Normalize image features for cosine similarity
+    faiss.normalize_L2(image_features)
+
+    # Dynamically determine number of clusters (nlist) for IVF
+    dim = image_features.shape[1]
+    nlist = min(len(image_features) // 10, 20)  # Adjust number of clusters dynamically
+
+    # Debug: Validate image features
+    assert image_features.ndim == 2, f"Expected 2D array, got {image_features.ndim}D"
+    assert not np.any(np.isnan(image_features)), "NaN values detected in image features"
+    assert image_features.shape[0] >= nlist, f"Number of training points is less than nlist"
+
+    # Create and train FAISS index
+    quantizer = faiss.IndexFlatIP(dim)  # Inner Product quantizer for cosine similarity
+    index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+    index.train(image_features)
+    index.add(image_features)
+
+    # Save the FAISS index
+    try:
+        faiss.write_index(index, index_path)
+        print(f"FAISS index saved successfully to '{index_path}'.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving FAISS index: {e}")
+
+    # Save metadata
+    try:
+        np.savez(metadata_path, names=np.array(image_names))
+        print(f"Metadata saved successfully to '{metadata_path}'.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving metadata: {e}")
+
+    return index, image_names
 
 # Define the image directory path
 IMAGE_DIR = "../backend/FashionIQ/resized_images"
@@ -150,8 +247,8 @@ def search_faiss_index(index, query_vector, k=10):
     try:
         D, I = index.search(query_vector, k)
         return D, I
-    except faiss.FaissException as fe:
-        raise HTTPException(status_code=500, detail=f"FAISS-specific error: {fe}")
+    # except faiss.FaissException as fe:
+    #     raise HTTPException(status_code=500, detail=f"FAISS-specific error: {fe}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during FAISS search: {e}")
 
@@ -231,12 +328,17 @@ def load_faiss_index(index_path, metadata_path):
 # Initialize models and index on startup
 @app.on_event("startup")
 async def startup():
-    global clip_model, preprocess, combiner, index, image_names, fine_tuned_clip_model, fine_tuned_preprocess, fine_tuned_index, fine_tuned_image_names
+    global clip_model, preprocess, combiner, index, image_names, fine_tuned_clip_model, fine_tuned_preprocess, fine_tuned_index, fine_tuned_image_names, directory, datasets, fine_tuned_datasets
+    datasets = {}
+    fine_tuned_datasets = {}
+    directory = "../backend/FashionIQ/resized_images"
     clip_model, preprocess = load_clip_model()
     fine_tuned_clip_model, fine_tuned_preprocess = load_fine_tuned_clip_model()
     combiner = load_combiner()
     fine_tuned_index, fine_tuned_image_names = load_faiss_index(fine_tuned_index_path, fine_tuned_metadata_path)
     index, image_names = load_faiss_index('image_index.faiss', 'image_metadata.npz')
+    datasets["FashionIQ"] = {"index": index, "names": image_names}
+    fine_tuned_datasets["FashionIQ"] = {"index": fine_tuned_index, "names": fine_tuned_image_names}
     print("Models and index loaded successfully.")
 
 # Define the API endpoint for prediction
@@ -244,8 +346,21 @@ async def startup():
 async def predict_endpoint(
     file: Optional[UploadFile] = File(None),  # Make file optional
     text: Optional[str] = Form(None),         # Make text optional
-    k: int = Form(10)  # Default to top 10 results
+    k: int = Form(10),  # Default to top 10 results
+    dataset: str = Form(...)                  # Dataset name is required
 ):
+    # Ensure the dataset exists
+    if dataset not in datasets or dataset not in fine_tuned_datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset}' not found.")
+
+    # Retrieve the correct FAISS indices and metadata
+    global fine_tuned_index, fine_tuned_image_names, index, image_names
+
+    fine_tuned_index = fine_tuned_datasets[dataset]["index"]  # Correct: Assign FAISS index
+    fine_tuned_image_names = fine_tuned_datasets[dataset]["names"]  # Assign names
+    index = datasets[dataset]["index"]  # Correct: Assign FAISS index
+    image_names = datasets[dataset]["names"]  # Assign names
+
     try:
         # Validate input
         if not file and not text:
@@ -348,10 +463,6 @@ def construct_query_vector(current_query, feedback, index, image_names):
 
     return new_query_features
 
-from pydantic import BaseModel
-from typing import List, Dict, Optional
-import json
-
 class FeedbackIteration(BaseModel):
     selected: List[str]
     unselected: List[str]
@@ -434,8 +545,237 @@ async def feedback_endpoint(
         print(f"Error processing feedback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
-# Mount the static directory to serve images
-app.mount("/images", StaticFiles(directory=IMAGE_DIR), name="images")
+# Route to create a new dataset
+@app.post("/create_dataset/")
+async def create_dataset(
+    dataset_name: str = Form(...),
+    files: List[UploadFile] = File(...)
+):
+    # dataset_dir = os.path.join("backend", dataset_name)
+    dataset_dir = dataset_name
+    resized_images_dir = os.path.join(dataset_dir, "resized_images")
+
+    # Create directories for the dataset
+    os.makedirs(resized_images_dir, exist_ok=True)
+
+    # Resize and save uploaded images
+    for file in files:
+        try:
+            image = Image.open(BytesIO(await file.read()))
+            resized_image = resize_image(image, target_ratio=1.0, dim=224)
+            resized_image.save(os.path.join(resized_images_dir, file.filename))
+        except UnidentifiedImageError:
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid image.")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error processing image {file.filename}: {e}")
+
+    # Create FAISS index and metadata for the base model
+    index_path = os.path.join(dataset_dir, f"image_index_{dataset_name}.faiss")
+    metadata_path = os.path.join(dataset_dir, f"image_metadata_{dataset_name}.npz")
+    index, image_names = create_faiss_index(resized_images_dir, clip_model, preprocess, index_path, metadata_path)
+
+    # Create FAISS index and metadata for the fine-tuned model
+    fine_tuned_index_path = os.path.join(dataset_dir, f"fine_tuned_image_index_{dataset_name}.faiss")
+    fine_tuned_metadata_path = os.path.join(dataset_dir, f"fine_tuned_image_metadata_{dataset_name}.npz")
+    fine_tuned_index, fine_tuned_image_names = create_faiss_index(
+        resized_images_dir, fine_tuned_clip_model, fine_tuned_preprocess, fine_tuned_index_path, fine_tuned_metadata_path
+    )
+
+    # Update the global dataset dictionaries
+    global datasets, fine_tuned_datasets, directory
+    datasets[dataset_name] = {"index": index, "names": image_names}
+    fine_tuned_datasets[dataset_name] = {"index": fine_tuned_index, "names": fine_tuned_image_names}
+    directory = f"../backend/{dataset_name}/resized_images"
+
+    return {"message": f"Dataset '{dataset_name}' created successfully.", "image_count": len(image_names)}
+    
+from fastapi.responses import FileResponse
+
+@app.get("/images/{dataset_name}/{file_path:path}")
+async def serve_image(dataset_name: str, file_path: str):
+    """
+    Serve static files dynamically based on the dataset.
+    """
+    if dataset_name not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    image_dir = f"../backend/{dataset_name}/resized_images"
+    file_full_path = os.path.join(image_dir, file_path)
+
+    if not os.path.isfile(file_full_path):
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    return FileResponse(file_full_path)
+
+# Route to append images to an existing dataset
+@app.post("/append_to_dataset/")
+async def append_to_dataset(
+    dataset_name: str = Form(...),
+    files: List[UploadFile] = File(...)
+):
+    global datasets, fine_tuned_datasets
+
+    print(f"Dataset received: {dataset_name}")
+    print(f"Available datasets: {datasets.keys()}")
+    print(f"Available fine-tuned datasets: {fine_tuned_datasets.keys()}")
+
+    # Ensure the dataset exists
+    if dataset_name not in datasets or dataset_name not in fine_tuned_datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found.")
+
+    print("Dataset exists, proceeding with appending images.")
+    if dataset_name != "FashionIQ":
+        dataset_dir = dataset_name
+        resized_images_dir = os.path.join(dataset_dir, "resized_images")
+        index_path = os.path.join(dataset_dir, f"image_index_{dataset_name}.faiss")
+        metadata_path = os.path.join(dataset_dir, f"image_metadata_{dataset_name}.npz")
+        fine_tuned_index_path = os.path.join(dataset_dir, f"fine_tuned_image_index_{dataset_name}.faiss")
+        fine_tuned_metadata_path = os.path.join(dataset_dir, f"fine_tuned_image_metadata_{dataset_name}.npz")
+    else:
+        resized_images_dir = f"FashionIQ/resized_images"
+        index_path = f"image_index.faiss"
+        metadata_path = f"image_metadata.npz"
+        fine_tuned_index_path = f"fine_tuned_image_index.faiss"
+        fine_tuned_metadata_path = f"fine_tuned_image_metadata.npz"
+
+    print(f"Resized images directory: {resized_images_dir}")
+    print(f"Index paths: {index_path}, {fine_tuned_index_path}")
+
+    # Resize and save uploaded images
+    new_image_names = []
+    for file in files:
+        try:
+            image = Image.open(BytesIO(await file.read()))
+            resized_image = resize_image(image, target_ratio=1.0, dim=224)
+            resized_image.save(os.path.join(resized_images_dir, file.filename))
+            new_image_names.append(file.filename)
+        except UnidentifiedImageError:
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid image.")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error processing image {file.filename}: {e}")
+
+    print(f"New images resized and saved: {new_image_names}")
+
+    # Load existing index and metadata
+    try:
+        existing_index, existing_image_names = load_faiss_index(index_path, metadata_path)
+        fine_tuned_existing_index, fine_tuned_existing_image_names = load_faiss_index(
+            fine_tuned_index_path, fine_tuned_metadata_path
+        )
+        print("Loaded existing indices and metadata.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading existing indices: {e}")
+
+    # Vectorize new images and append to the base model index
+    try:
+        print("Starting vectorization of new images...")
+        new_image_features = vectorize_new_images(resized_images_dir, new_image_names, clip_model, preprocess)
+        print(f"Vectorization complete. New image features shape: {new_image_features.shape}")
+        
+        print(f"Existing FAISS index dimensions: {existing_index.d}")
+        if new_image_features.shape[1] != existing_index.d:
+            raise ValueError(f"Dimension mismatch: new vectors have {new_image_features.shape[1]} dims, expected {existing_index.d}.")
+        
+        print(f"Adding {new_image_features.shape[0]} new vectors to the FAISS index...")
+        existing_index.add(new_image_features)
+        print("New vectors successfully added to the FAISS index.")
+        
+        # Ensure consistent data type for updated_image_names
+        updated_image_names = np.concatenate([existing_image_names, np.array(new_image_names)])
+        print(f"Updated image names count: {len(updated_image_names)}")
+        print("Base model index update complete.")
+    except ValueError as ve:
+        print(f"Dimension mismatch error: {ve}")
+        raise HTTPException(status_code=500, detail=f"Dimension mismatch error: {ve}")
+    except Exception as e:
+        print(f"Error during base model index update: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating base model index: {e}")
+
+    # Save updated base model index and metadata
+    try:
+        faiss.write_index(existing_index, index_path)
+        np.savez(metadata_path, names=np.array(updated_image_names))
+        print("Base model index and metadata saved.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving base model index: {e}")
+
+    # Vectorize new images and append to the fine-tuned model index
+    try:
+        fine_tuned_new_image_features = vectorize_new_images(
+            resized_images_dir, new_image_names, fine_tuned_clip_model, fine_tuned_preprocess
+        )
+        if fine_tuned_new_image_features.shape[1] != fine_tuned_existing_index.d:
+            raise ValueError(f"Dimension mismatch: fine-tuned vectors have {fine_tuned_new_image_features.shape[1]} dims, expected {fine_tuned_existing_index.d}.")
+        fine_tuned_existing_index.add(fine_tuned_new_image_features)
+        fine_tuned_updated_image_names = np.concatenate([fine_tuned_existing_image_names, np.array(new_image_names)])
+        print("Fine-tuned model index updated.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating fine-tuned model index: {e}")
+
+    # Save updated fine-tuned model index and metadata
+    try:
+        faiss.write_index(fine_tuned_existing_index, fine_tuned_index_path)
+        np.savez(fine_tuned_metadata_path, names=np.array(fine_tuned_updated_image_names))
+        print("Fine-tuned model index and metadata saved.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving fine-tuned model index: {e}")
+
+    # Update the global dataset dictionaries
+    try:
+        datasets[dataset_name] = {"index": existing_index, "names": updated_image_names}
+        fine_tuned_datasets[dataset_name] = {
+            "index": fine_tuned_existing_index,
+            "names": fine_tuned_updated_image_names,
+        }
+        print("Global dataset dictionaries updated.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating global dataset dictionaries: {e}")
+
+    return {
+        "message": f"Successfully appended {len(new_image_names)} images to dataset '{dataset_name}'.",
+        "new_image_count": len(new_image_names),
+        "total_image_count": len(updated_image_names),
+    }
+
+# Helper function to vectorize new images
+def vectorize_new_images(image_folder, new_image_names, clip_model, preprocess):
+    """
+    Vectorizes new images by preprocessing and encoding them with the CLIP model.
+
+    Args:
+        image_folder (str): Folder containing the new images.
+        new_image_names (list): List of new image filenames to process.
+        clip_model: Preloaded CLIP model.
+        preprocess: Preprocessing function for the CLIP model.
+
+    Returns:
+        np.ndarray: Array of vectorized image features.
+    """
+    new_image_features = []
+
+    for image_name in new_image_names:
+        image_path = os.path.join(image_folder, image_name)
+        if os.path.isfile(image_path):
+            try:
+                # Preprocess and vectorize the image
+                image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    image_feature = clip_model.encode_image(image).cpu().numpy()
+                new_image_features.append(image_feature)
+            except UnidentifiedImageError:
+                print(f"Skipping invalid image file: {image_name}")
+            except Exception as e:
+                print(f"Error processing image {image_name}: {e}")
+
+    # If no valid images are found, raise an error
+    if not new_image_features:
+        raise ValueError("No valid images were processed for vectorization.")
+
+    # Convert features to NumPy array and normalize
+    new_image_features = np.vstack(new_image_features).astype(np.float32)
+    faiss.normalize_L2(new_image_features)
+
+    return new_image_features
 
 # Run the app
 if __name__ == "__main__":

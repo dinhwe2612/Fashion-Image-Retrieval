@@ -351,7 +351,7 @@ const FashionSearch = () => {
         </h2>
         <h2 className="text-right text-md mb-4 text-gray-500">
           {searchResults.length > 0 && (
-            <>Not satisfied?  
+            <>{isEvaluating ? (<> Have selected all the relevant images?</>) : (<> Not satisfied?</>)}  
               {searchResults.length > 0 ?
                 (<a onClick={
                   async () => {

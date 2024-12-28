@@ -1,22 +1,34 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useRef } from "react";
 
-const AddNewReference = ({onClose}) =>{
+const AddNewReference = ({ onClose }) => {
   const [uploadedFiles, setUploadedFiles] = useState([]);
-
+  const fileInputRef = useRef(null); // Use a ref for the file input
 
   const handleFileUpload = (e) => {
-    const files = Array.from(e.target.files); // Convert files to an array
+    const files = Array.from(e.target.files);
     setUploadedFiles((prev) => [...prev, ...files]);
   };
+
   const handleRemoveFile = (indexToRemove) => {
-    setUploadedFiles((prev) =>
-      prev.filter((_, index) => index !== indexToRemove) // Remove file by index
-    );
+    setUploadedFiles((prev) => {
+      const newFiles = prev.filter((_, index) => index !== indexToRemove);
+      
+      if (newFiles.length === 0) {
+        // If no files are left, clear the file input field
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ""; // Clear the input field
+        }
+      }
+      
+      return newFiles;
+    });
   };
+
   const handleClearInput = (inputId) => {
     const inputElement = document.getElementById(inputId);
-    if (inputElement) inputElement.value = ""; // Clear the file input to allow re-uploading the same file
+    if (inputElement) inputElement.value = ""; // Clear the file input field
   };
+
   return (
     <div className="fixed inset-0 bg-white bg-opacity-50 flex items-center justify-center z-50 shadow-lg">
       <div className="bg-white p-6 rounded-lg w-3/4 max-h-[80vh] overflow-hidden">
@@ -26,6 +38,7 @@ const AddNewReference = ({onClose}) =>{
         <div className="mb-4">
           <input
             id="fileUpload"
+            ref={fileInputRef} // Attach ref to the file input
             accept="image/*"
             type="file"
             multiple
@@ -73,7 +86,7 @@ const AddNewReference = ({onClose}) =>{
             Cancel
           </button>
           <button
-            onClick={() => onClose(uploadedFiles)} // Pass uploaded files on Uploa}
+            onClick={() => onClose(uploadedFiles)} // Pass uploaded files on Upload
             className="bg-blue-500 text-white px-4 py-2 rounded-lg"
           >
             Upload
@@ -82,6 +95,6 @@ const AddNewReference = ({onClose}) =>{
       </div>
     </div>
   );
-}
+};
 
 export default AddNewReference;

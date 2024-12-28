@@ -209,7 +209,8 @@ const FashionSearch = () => {
   const handleAddRef = async (uploadedFiles) => {
     if (uploadedFiles.length === 0) {
       console.log("No files uploaded.");
-      alert("Please upload at least one file.");
+      // alert("Please upload at least one file.");
+      setIsModalOpen(false)
       return;
     }
   
